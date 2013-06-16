@@ -224,7 +224,7 @@ __global__ void Map( float *d_f, float *d_k, int *d_y, float *d_delta_a, unsigne
 __global__ void Update(float *d_k, int *d_y, float *d_f, float *d_a, float *d_delta_a, 
 					   unsigned int *d_I_global, unsigned int *d_I_cache, float* C, int *d_active, int ntraining)
 {
-	unsigned int i = threadIdx.x;//task number
+	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;//task number
 	if (d_active[i] == 1)
 	{
 		int g_Iup = d_I_global[2*i];
@@ -256,8 +256,8 @@ __device__ float get_selfdot(float *xv, int *xi, int *iax, unsigned int irow )
 __device__ float makedot(float *xv, int *xi, int *iax, unsigned int i1row, unsigned int i2row )
 {
 	float res = 0;
-	int ind1 = iax[i1row];
-	int ind2 = iax[i2row];
+	unsigned int ind1 = iax[i1row];
+	unsigned int ind2 = iax[i2row];
 	while (ind1 < iax[i1row+1] && ind2 < iax[i2row+1])
 	{
 		if (xi[ind1] == xi[ind2])
@@ -277,6 +277,42 @@ __device__ float makedot(float *xv, int *xi, int *iax, unsigned int i1row, unsig
 	}
 	return res;
 }
+__device__ float get_norm(float *xv, int *xi, int *iax, float *yv, int *yi, int *iay, int i1row, int i2row )
+{
+	float res = 0;
+	int ind1 = iax[i1row];
+	int ind2 = iay[i2row];
+	while (ind1 < iax[i1row+1] && ind2 < iay[i2row+1])
+	{
+		if (xi[ind1] == yi[ind2])
+		{
+			res += (xv[ind1]-yv[ind2])*(xv[ind1]-yv[ind2]);
+			++ind1;
+			++ind2;
+		}
+		else if (xi[ind1] > yi[ind2])
+		{
+			res += yv[ind2]*yv[ind2];
+			++ind2;
+		}
+		else
+		{
+			res += xv[ind1]*xv[ind1];
+			++ind1;
+		}
+	}
+	while (ind1 < iax[i1row+1])
+	{
+		res += xv[ind1]*xv[ind1];
+		++ind1;
+	}
+	while (ind2 < iay[i2row+1])
+	{
+		res += yv[ind2]*yv[ind2];
+		++ind2;
+	}
+	return res;
+}
 /**
 * Calculate kernel matrix row
 * @param d_k device pointer to the kernel matrix
@@ -287,14 +323,15 @@ __device__ float makedot(float *xv, int *xi, int *iax, unsigned int i1row, unsig
 * @param icache index of kernel matrix row in cache
 * @param ntraining # of training samples
 */
-__global__ void get_row(float *d_k, float *d_TVv, int *d_TVi, int *d_iaTV, float *selfdot, unsigned int irow, unsigned int icache, int ntraining)
+__global__ void get_row(float *d_k, float *d_TVv, int *d_TVi, int *d_iaTV, unsigned int irow, unsigned int icache, int ntraining)
 {
 	unsigned int gridsize = blockDim.x*gridDim.x;
 	unsigned int i = blockDim.x*blockIdx.x+threadIdx.x;
 
 	while ( i < ntraining)
 	{
-		d_k[icache*ntraining+i] = selfdot[irow] + selfdot[i] - 2*makedot(d_TVv, d_TVi, d_iaTV, i, irow);
+		//d_k[icache*ntraining+i] = get_selfdot(d_TVv, d_TVi, d_iaTV, i) + get_selfdot(d_TVv, d_TVi, d_iaTV, irow) - 2*makedot(d_TVv, d_TVi, d_iaTV, i, irow);
+		d_k[icache*ntraining+i] = get_norm(d_TVv, d_TVi, d_iaTV, d_TVv, d_TVi, d_iaTV, irow, i);
 		i += gridsize;
 	}
 }
@@ -374,7 +411,7 @@ __global__ void Update1(float *d_k, int *d_y, float *d_f, float *d_a, float *d_d
 						unsigned int *d_I_global, unsigned int *d_I_cache, 
 						float* d_param, int *d_active, int ntraining)
 {
-	unsigned int i = threadIdx.x;//task number
+	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;//task number
 	if (d_active[i] == 1)
 	{
 		int g_Iup = d_I_global[2*i];
@@ -383,71 +420,71 @@ __global__ void Update1(float *d_k, int *d_y, float *d_f, float *d_a, float *d_d
 		float alpha_low_old =d_a[i*ntraining+g_Ilow];
 		float gamma;
 		float eps = 0.000001;
-	int s = d_y[g_Iup]*d_y[g_Ilow];
-	float C = d_param[2*i];
-	float L;
-	float H;
-	if (d_y[g_Iup] == d_y[g_Ilow])
-		gamma = alpha_low_old + alpha_up_old;
-	else
-		gamma = alpha_low_old - alpha_up_old;
-	
+		int s = d_y[g_Iup]*d_y[g_Ilow];
+		float C = d_param[2*i];
+		float L;
+		float H;
+		if (d_y[g_Iup] == d_y[g_Ilow])
+			gamma = alpha_low_old + alpha_up_old;
+		else
+			gamma = alpha_low_old - alpha_up_old;
 
-	if (s == 1)
-	{
-		L = max(0, gamma - C);
-		H = min(C, gamma);
-	}
-	else
-	{
-		L = max(0, -gamma);
-		H = min(C, C - gamma);
-	}
-	if (H <= L)
-		d_active[i] = 0;
 
-	float nu = 2*exp(-d_param[2*i+1]*d_k[d_I_cache[2*i+1]*ntraining+g_Iup]) - 2;
-	float alpha_up_new;
-	float alpha_low_new;
-	if (nu < 0)
-	{
-		alpha_up_new = max(L, min(alpha_up_old - (d_y[g_Iup]*(d_f[i*ntraining+g_Ilow]-d_f[i*ntraining+g_Iup])/nu), H));
-	}
-	else
-	{
-		float slope= d_y[g_Iup]*(d_f[i*ntraining+g_Ilow]-d_f[i*ntraining+g_Iup]);
-		float change= slope * (H-L);
-		if(fabs(change)>0.0f)
+		if (s == 1)
 		{
-			if(slope>0.0f)
-				alpha_up_new= H;
-			else
-				alpha_up_new= L;
+			L = max(0, gamma - C);
+			H = min(C, gamma);
 		}
 		else
-			alpha_up_new= alpha_up_old;
+		{
+			L = max(0, -gamma);
+			H = min(C, C - gamma);
+		}
+		if (H <= L)
+			d_active[i] = 0;
 
-		if( alpha_up_new > C - eps * C)
-			alpha_up_new=C;
-		else if (alpha_up_new < eps * C)
+		float nu = 2*exp(-d_param[2*i+1]*d_k[d_I_cache[2*i+1]*ntraining+g_Iup]) - 2;
+		float alpha_up_new;
+		float alpha_low_new;
+		if (nu < 0)
+		{
+			alpha_up_new = max(L, min(alpha_up_old - (d_y[g_Iup]*(d_f[i*ntraining+g_Ilow]-d_f[i*ntraining+g_Iup])/nu), H));
+		}
+		else
+		{
+			float slope= d_y[g_Iup]*(d_f[i*ntraining+g_Ilow]-d_f[i*ntraining+g_Iup]);
+			float change= slope * (H-L);
+			if(fabs(change)>0.0f)
+			{
+				if(slope>0.0f)
+					alpha_up_new= H;
+				else
+					alpha_up_new= L;
+			}
+			else
+				alpha_up_new= alpha_up_old;
+
+			if( alpha_up_new > C - eps * C)
+				alpha_up_new=C;
+			else if (alpha_up_new < eps * C)
 				alpha_up_new=0.0f;
-	}
-	if( fabs( alpha_up_new - alpha_up_old) < eps * ( alpha_up_new + alpha_up_old + eps))
-		d_active[i] = 0;
-	if (s == 1)
-		alpha_low_new = gamma - alpha_up_new;
-	else
-		alpha_low_new = gamma + alpha_up_new;
+		}
+		if( fabs( alpha_up_new - alpha_up_old) < eps * ( alpha_up_new + alpha_up_old + eps))
+			d_active[i] = 0;
+		if (s == 1)
+			alpha_low_new = gamma - alpha_up_new;
+		else
+			alpha_low_new = gamma + alpha_up_new;
 
-	if( alpha_low_new > C - eps * C)
-		alpha_low_new=C;
-	else if (alpha_low_new < eps * C)
+		if( alpha_low_new > C - eps * C)
+			alpha_low_new=C;
+		else if (alpha_low_new < eps * C)
 			alpha_low_new=0.0f;
 
-	d_delta_a[2*i] = alpha_up_new - alpha_up_old;
-	d_delta_a[2*i+1] = alpha_low_new - alpha_low_old;
-	d_a[i*ntraining+g_Iup] = alpha_up_new;
-	d_a[i*ntraining+g_Ilow] = alpha_low_new;
+		d_delta_a[2*i] = alpha_up_new - alpha_up_old;
+		d_delta_a[2*i+1] = alpha_low_new - alpha_low_old;
+		d_a[i*ntraining+g_Iup] = alpha_up_new;
+		d_a[i*ntraining+g_Ilow] = alpha_low_new;
 
 	}
 }

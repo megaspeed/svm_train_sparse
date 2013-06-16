@@ -10,31 +10,32 @@
 
 struct svm_sample
 {
-	int nTV;				/*# of test vectors/samples */
-	int *l_TV;				/*	TV's labels				*/
-	float *TV;				/*	TVs in CSR format	*/
-	int *ind;
-	int	*ia;			/*	ia[i] # of elements in ith sample vector*/
+	int nTV;			/*	# of test vectors/samples				*/
+	int *l_TV;			/*	TV's labels								*/
+	float *TV;			/*	TVs in CSR format						*/
+	int *ind;			/*	column indeces							*/
+	int *ia;	/*	ia[i+1] - # of elements in 0..i rows	*/
 };
 
 struct svm_model
 {
-	int nr_class;			/*	number of classes		*/
-	int nSV;				/*	# of SV					*/
-	float *SV;				/*	SVs in CSR format		*/
+	int nr_class;		/*	number of classes						*/
+	int nSV;			/*	# of SV									*/
+	float *SV;			/*	SVs in CSR format						*/
 	int *ind;
-	int		*ia;			/*	ia[i] # of elements in ith SV*/
+	int *ia;	/*	ia[i+1] - # of elements in 0..i rows	*/
 	int nfeatures;
-	float *sv_coef;		/*	SV's labels				*/
-	float b;			/*	classification parametr	*/	
-	int *label_set;		/*  intput lables			*/
+	float *sv_coef;		/*	SV's labels								*/
+	float b;			/*	classification parametr					*/	
+	int *label_set;		/*  intput lables							*/
+	int *SVperclass;	/*	number of SVs for each class			*/
 	int svm_type;
 	int kernel_type;
 	float coef_d;
 	float coef_gamma;
 	float coef_b;
 	float C;
-	float *params;		/*	params C_i, gamma_i for RBF*/
+	float *params;		/*	params C_i, gamma_i for RBF				*/
 	float* mass_b;
 	int	ntasks;
 };

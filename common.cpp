@@ -67,7 +67,10 @@ float cuGetTimer() { // result in miliSec
 */
 void set_labels(svm_sample *train, svm_model *model)
 {
+	model->nr_class = 2;
 	model->label_set = (int*)malloc(2*sizeof(int));
+	model->SVperclass = (int*)malloc(2*sizeof(int));
+	model->SVperclass[0] = 0;
 	model->label_set[0] = 1;
 	model->label_set[1] = -1;
 	int buf = train->l_TV[0];
@@ -91,27 +94,31 @@ void set_labels(svm_sample *train, svm_model *model)
 	for (int i = 0; i < train->nTV; i++)
 	{
 		if (train->l_TV[i] == model->label_set[0])
-			train->l_TV[i] = 1;
+			{
+				train->l_TV[i] = 1;
+				++model->SVperclass[0];
+			}
 		else
 			train->l_TV[i] = -1;
 	}
+	model->SVperclass[1] = train->nTV - model->SVperclass[0];
 }
 
-static char* readline(FILE *input, char* line, int *max_line_len)
+static char* readline(FILE *input, char** line, unsigned int *max_line_len)
 {
 	int len;
-	if(fgets(line,*max_line_len,input) == NULL)
+	if(fgets(*line,*max_line_len,input) == NULL)
 		return NULL;
 
-	while(strrchr(line,'\n') == NULL)
+	while(strrchr(*line,'\n') == NULL)
 	{
 		*max_line_len *= 2;
-		line = (char *) realloc(line,*max_line_len);
-		len = (int) strlen(line);
-		if(fgets(line+len,*max_line_len-len,input) == NULL)
+		*line = (char *) realloc(*line,*max_line_len);
+		len = (int) strlen(*line);
+		if(fgets(*line+len,*max_line_len-len,input) == NULL)
 			break;
 	}
-	return line;
+	return *line;
 }
 
 void exit_input_error(int line_num)
@@ -126,11 +133,11 @@ int parse_TV(FILE* fp, svm_sample *train)
 {
 	int elements = 0;		// # of presented features
 	int l = 0;
-	int max_line_len = 1024;
+	unsigned int max_line_len = 1024;
 	char *line = (char*)malloc(max_line_len*sizeof(char));
 	char *p,*endptr,*idx,*val;
 
-	while(readline(fp, line, &max_line_len)!=NULL)
+	while(readline(fp, &line, &max_line_len)!=NULL)
 	{
 		p = strtok(line,":");
 		while(1)
@@ -157,7 +164,7 @@ int parse_TV(FILE* fp, svm_sample *train)
 	int j = 0;
 	for(int i = 0; i < l; i++)
 	{
-		readline(fp, line, &max_line_len);
+		readline(fp, &line, &max_line_len);
 
 		p = strtok(line, " \t");
 		train->l_TV[i] = (int)strtod(p,&endptr);
@@ -176,7 +183,7 @@ int parse_TV(FILE* fp, svm_sample *train)
 		ia[i+1] = j;
 	}
 	free(line);
-	if (ferror(fp) != 0 || fclose(fp) != 0)
+	if (fclose(fp) != 0)
 		return 1;
 
 	return 0;
@@ -214,7 +221,6 @@ int read_model(const char* model_file_name, svm_model *model)
 			if(svm_type_table[i] == NULL)
 			{
 				fprintf(stderr,"unknown svm type.\n");
-				//free_model(model);
 				return 0;
 			}
 		}
@@ -233,7 +239,6 @@ int read_model(const char* model_file_name, svm_model *model)
 			if(kernel_type_table[i] == NULL)
 			{
 				fprintf(stderr,"unknown kernel function.\n");
-				//free_model(model);
 				return 0;
 			}
 		}
@@ -248,13 +253,7 @@ int read_model(const char* model_file_name, svm_model *model)
 		else if(strcmp(cmd,"total_sv")==0)
 			fscanf(fp,"%d",&model->nSV);
 		else if(strcmp(cmd,"rho")==0)
-		{
-			//int n = model->nr_class * (model->nr_class-1)/2;
-			//model->b = (float*)malloc(n*sizeof(float));
-			//for(int i=0;i<n;i++)
-			//	fscanf(fp,"%f",&model->b[i]);
 			fscanf(fp,"%f",&model->b);
-		}
 		else if(strcmp(cmd,"label")==0)
 		{
 			int n = model->nr_class;
@@ -265,9 +264,9 @@ int read_model(const char* model_file_name, svm_model *model)
 		else if(strcmp(cmd,"nr_sv")==0)
 		{
 			int n = model->nr_class;
-			int temp;
+			model->SVperclass = (int*)malloc(n*sizeof(int));
 			for(int i=0;i<n;i++)
-				fscanf(fp,"%d",&temp);
+				fscanf(fp,"%d",&model->SVperclass[i]);
 		}
 		else if(strcmp(cmd,"SV")==0)
 		{
@@ -290,11 +289,11 @@ int read_model(const char* model_file_name, svm_model *model)
 	int elements = 0;		// # of presented features
 	long pos = ftell(fp);
 
-	int max_line_len = 1024;
+	unsigned int max_line_len = 1024;
 	char *line = (char*)malloc(max_line_len*sizeof(char));
 	char *p,*endptr,*idx,*val;
 
-	while(readline(fp, line, &max_line_len)!=NULL)
+	while(readline(fp, &line, &max_line_len)!=NULL)
 	{
 		p = strtok(line,":");
 		while(1)
@@ -323,7 +322,7 @@ int read_model(const char* model_file_name, svm_model *model)
 	ia[0] = 0;
 	for(i=0;i<l;i++)
 	{
-		readline(fp, line, &max_line_len);
+		readline(fp, &line, &max_line_len);
 		p = strtok(line, " \t");
 		model->sv_coef[i] = (float)strtod(p,&endptr);
 
@@ -340,10 +339,9 @@ int read_model(const char* model_file_name, svm_model *model)
 		}		
 		ia[i+1] = j;
 	}
-	//free(line);
+	free(line);
 	if (ferror(fp) != 0 || fclose(fp) != 0)
 	{
-		//free_model(model);
 		return 1;
 	}
 	return 0;
@@ -373,14 +371,7 @@ int save_model(FILE *fp, const svm_model *model)
 	int l = model->nSV;
 	fprintf(fp, "nr_class %d\n", nr_class);
 	fprintf(fp, "total_sv %d\n",l);
-	
-	{
-		fprintf(fp, "rho");
-		//for(int i=0;i<nr_class*(nr_class-1)/2;i++)
-		//	fprintf(fp," %f",model->b[i]);		
-		fprintf(fp," %f",model->b);
-		fprintf(fp, "\n");
-	}
+	fprintf(fp,"rho %f\n",model->b);
 	
 	if(model->label_set)
 	{
@@ -390,6 +381,13 @@ int save_model(FILE *fp, const svm_model *model)
 		fprintf(fp, "\n");
 	}
 
+	if(model->SVperclass)
+	{
+		fprintf(fp, "nr_sv");
+		for(int i=0;i<nr_class;i++)
+			fprintf(fp," %d",model->SVperclass[i]);
+		fprintf(fp, "\n");
+	}
 
 	fprintf(fp, "SV\n");
 	float *sv_coef = model->sv_coef;
@@ -453,10 +451,10 @@ bool chech_condition(float* B, int *active_task, int ntasks, int iter)
 		if (B[2*i+1] <= B[2*i] + 2*TAU)
 		{
 			active_task[i] = 0;
-			if(!converg_time[i]){
-				converg_time[i]=cuGetTimer();
-				printf("Task %d has convergent in %f on iter=%d\n", i, converg_time[i], iter);
-			}
+			//if(!converg_time[i]){
+			//	converg_time[i]=cuGetTimer();
+			//	printf("Task %d has convergent in %f on iter=%d\n", i, converg_time[i], iter);
+			//}
 		}
 		run = run||active_task[i];
 	}
@@ -481,7 +479,7 @@ void set_model_param(svm_model *model, float cbegin, int c_col, float gbegin, in
 		C[i] = C[i-1]/2;
 	}
 
-	gamma[0] = 1./model->nfeatures;
+	gamma[0] = max(1./model->nfeatures, 0.0001);
 	if(g_col > 1)
 		gamma[1] = gbegin;
 	for (int i = 2; i < g_col; i++)
@@ -503,21 +501,6 @@ void set_model_param(svm_model *model, float cbegin, int c_col, float gbegin, in
 	model->svm_type = 0;
 	free(C);
 	free(gamma);
-}
-/**
-* Divide train data into train and test subsets in a ratio percent
-*/
-void balabce_data(svm_sample *train, svm_sample *test, float percent)
-{
-	int train_part = (int)(train->nTV*percent);
-	test->nTV = train->nTV - train_part;
-	train->nTV = train_part;
-	test->l_TV = &train->l_TV[train_part];
-	test->TV = &train->TV[train_part];
-	//test->nTV=train->nTV;
-	//test->l_TV=train->l_TV;
-	//test->TV=train->TV;
-
 }
 
 void get_cached_rows(int *ai, int cache_size, int n, int **num_rows, int *num_parts)
@@ -543,4 +526,41 @@ void get_cached_rows(int *ai, int cache_size, int n, int **num_rows, int *num_pa
 	}
 	*num_parts = k;
 	*num_rows = (int*)realloc(parts, k*sizeof(int));
+}
+//Swap i,j label
+void swap_l(int *l, int i, int j)
+{
+	int buf = l[i];
+	l[i] = l[j];
+	l[j] = buf;
+}
+
+void set_folds(svm_sample *train, svm_sample *test, int nfolds, int nfeatures)
+{
+	svm_sample *folds = (svm_sample*)malloc(sizeof(svm_sample));
+	int n = train->nTV;
+	int m = n/nfolds;
+	int total_elem = nfolds*m;
+	folds->l_TV = (int*)malloc(total_elem*sizeof(int));
+	folds->TV = (float*)malloc(total_elem*nfeatures*sizeof(float));
+	int shift = m*nfeatures;
+	for (int i = 0; i < m; i++)
+	{
+		for (int ifold = 0; ifold < nfolds; ifold++)
+		{
+			folds->l_TV[ifold*m+i] = train->l_TV[i*nfolds+ifold];
+			for (int k = 0; k < nfeatures; k++)
+			{
+				folds->TV[ifold*shift+i*nfeatures+k] = train->TV[(i*nfolds+ifold)*nfeatures+k];
+			}
+		}
+	}
+	free(train->TV);
+	free(train->l_TV);
+	train->nTV = (nfolds-1)*m;
+	test->nTV = m;
+	train->TV = folds->TV;
+	train->l_TV = folds->l_TV;
+	test->TV = &folds->TV[train->nTV*nfeatures];
+	test->l_TV = &folds->l_TV[train->nTV];
 }
